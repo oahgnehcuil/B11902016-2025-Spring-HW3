@@ -6,3 +6,6 @@ quantstats==0.0.62
 gurobipy
 ipython
 argparse
+scikit-learn
+joblib
+alpha_vantage

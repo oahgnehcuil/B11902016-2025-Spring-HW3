@@ -9,7 +9,6 @@ import quantstats as qs
 import gurobipy as gp
 import warnings
 import argparse
-import tensorflow as tf
 from sklearn.preprocessing import StandardScaler
 
 """
@@ -46,71 +45,78 @@ Strategy Creation
 Create your own strategy, you can add parameter but please remain "price" and "exclude" unchanged
 """
 
+import joblib
+from sklearn.preprocessing import StandardScaler
 
 class MyPortfolio:
-  """
-  NOTE: You can modify the initialization function
-  """
-  def __init__(self, price, exclude, lookback=50, gamma=0):
-    self.price = price
-    self.returns = price.pct_change().fillna(0)
-    self.exclude = exclude
-    self.lookback = lookback
-    self.gamma = gamma
+    def __init__(self, price, exclude, lookback=50, gamma=0):
+        self.price = price
+        self.returns = price.pct_change().fillna(0)
+        self.exclude = exclude
+        self.lookback = lookback
+        self.gamma = gamma
 
-    self.model = tf.keras.models.load_model('lstm_portfolio_model.h5')
-    self.scaler = StandardScaler()
+        # ✨ 載入你的訓練好NN模型
+        self.model = joblib.load("nn_portfolio_model.pkl")
+        self.scaler = StandardScaler()
 
-  def calculate_weights(self):
-    assets = self.price.columns[self.price.columns != self.exclude]
-    assets = list(assets)
+    def calculate_weights(self):
+        # 不包含 SPY 的資產
+        assets = self.price.columns[self.price.columns != self.exclude]
+        assets = list(assets)
 
-    returns = self.price.pct_change().fillna(0)
+        returns = self.price.pct_change().fillna(0)
 
-    returns = returns[assets]
+        # 只取 assets，排除 SPY
+        returns = returns[assets]
 
-    returns_scaled = self.scaler.fit_transform(returns)
+        returns_scaled = self.scaler.fit_transform(returns)
 
-    self.portfolio_weights = pd.DataFrame(index=self.price.index, columns=self.price.columns)
+        # 初始化空的 DataFrame
+        self.portfolio_weights = pd.DataFrame(index=self.price.index, columns=self.price.columns)
 
-    for i in range(self.lookback, len(returns_scaled)):
-      input_seq = returns_scaled[i - self.lookback:i]
-      input_seq = np.expand_dims(input_seq, axis=0) 
+        for i in range(self.lookback, len(returns_scaled)):
+            # 取最近 lookback 天資料
+            input_seq = returns_scaled[i - self.lookback:i]
+            input_seq = input_seq.flatten().reshape(1, -1)  # 攤平成一行 (1, lookback * assets)
 
-      pred = self.model.predict(input_seq, verbose=0)
-      pred = pred.flatten()
+            # 預測
+            pred = self.model.predict(input_seq)
+            pred = pred.flatten()
 
-      weights = np.maximum(pred, 0)
+            # 預測值可能有負數，要處理
+            weights = np.maximum(pred, 0)
 
-      if weights.sum() > 0:
-          weights /= weights.sum()
-      else:
-          weights = np.ones_like(weights) / len(weights)
+            if weights.sum() > 0:
+                weights /= weights.sum()
+            else:
+                weights = np.ones_like(weights) / len(weights)
 
-      self.portfolio_weights.iloc[i, :] = 0
-      self.portfolio_weights.loc[self.price.index[i], assets] = weights
+            # 填進權重表
+            self.portfolio_weights.iloc[i, :] = 0
+            self.portfolio_weights.loc[self.price.index[i], assets] = weights
 
-    self.portfolio_weights.ffill(inplace=True)
-    self.portfolio_weights.fillna(0, inplace=True)
+        # 補上空白天數
+        self.portfolio_weights.ffill(inplace=True)
+        self.portfolio_weights.fillna(0, inplace=True)
 
+    def calculate_portfolio_returns(self):
+        if not hasattr(self, "portfolio_weights"):
+            self.calculate_weights()
 
-  def calculate_portfolio_returns(self):
-    if not hasattr(self, "portfolio_weights"):
-        self.calculate_weights()
+        self.portfolio_returns = self.returns.copy()
+        assets = self.price.columns[self.price.columns != self.exclude]
+        self.portfolio_returns["Portfolio"] = (
+            self.portfolio_returns[assets]
+            .mul(self.portfolio_weights[assets])
+            .sum(axis=1)
+        )
 
-    self.portfolio_returns = self.returns.copy()
-    assets = self.price.columns[self.price.columns != self.exclude]
-    self.portfolio_returns["Portfolio"] = (
-        self.portfolio_returns[assets]
-        .mul(self.portfolio_weights[assets])
-        .sum(axis=1)
-    )
+    def get_results(self):
+        if not hasattr(self, "portfolio_returns"):
+            self.calculate_portfolio_returns()
 
-  def get_results(self):
-    if not hasattr(self, "portfolio_returns"):
-        self.calculate_portfolio_returns()
-
-    return self.portfolio_weights, self.portfolio_returns
+        return self.portfolio_weights, self.portfolio_returns
 
 
 """
