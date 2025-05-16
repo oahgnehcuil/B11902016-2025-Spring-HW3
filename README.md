@@ -5,7 +5,8 @@
 1. python -m venv venv
 2. source venv/bin/activate
 3. pip install -r requirements.txt
-4. deactivate // leave the virtual environment
+4. python3 nn.py  # Generate nn_portfolio_model.pkl
+5. deactivate // leave the virtual environment
 
 ## Part 1
 
